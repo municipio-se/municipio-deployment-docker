@@ -76,8 +76,8 @@ jobs:
             "MUNICIPIO_DEPLOYMENT_REF=feat/municipio-clone"
           secrets: |
             "acf_pro_key=${{ secrets.ACF_PRO_KEY }}"
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+#          cache-from: type=gha
+#          cache-to: type=gha,mode=max
 
       - name: Create release
         env:

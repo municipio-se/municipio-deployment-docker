@@ -95,7 +95,7 @@ jobs:
             municipio-se.source-ref=${{ steps.ctx.outputs.tag }}
             municipio-se.run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           build-args: |
-            "MUNICIPIO_DEPLOYMENT_REF=${{ steps.ctx.outputs.tag }}"
+            "MUNICIPIO_DEPLOYMENT_REF=feat/municipio-clone"
           secrets: |
             "acf_pro_key=${{ secrets.ACF_PRO_KEY }}"
           platforms: linux/amd64
@@ -108,4 +108,4 @@ jobs:
           git tag -f "$TAG" && git push -f origin "$TAG"
           gh release create "$TAG" \
             --title "$TAG" \
-            --notes "Image: \`ghcr.io/${{ github.repository }}:$TAG\` Source: ${{ env.SOURCE_REPO }}@$TAG"
+            --notes "Image: \`ghcr.io/${{ github.repository }}:$TAG\`"

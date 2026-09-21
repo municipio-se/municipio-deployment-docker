@@ -2,13 +2,21 @@ name: Release
 
 on:
   repository_dispatch:
-    types: [ source-tag ]
+    types: [source-tag]
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build'
+        description: 'Tag in source repo to build'
         required: true
         type: string
+      force:
+        description: 'Rebuild even if the image exists'
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.event.client_payload.tag || inputs.tag }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -64,6 +72,15 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Refuse to overwrite
+        if: ${{ !inputs.force }}
+        run: |
+          if docker manifest inspect \
+               ghcr.io/${{ github.repository }}:${{ steps.ctx.outputs.tag }} >/dev/null 2>&1; then
+            echo "::error::${{ steps.ctx.outputs.tag }} already exists — use force to rebuild."
+            exit 1
+          fi
+
       - name: Build and push image
         uses: docker/build-push-action@v7
         with:
@@ -71,13 +88,17 @@ jobs:
           file: Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.source=https://github.com/municipio-se/municipio-deployment
+            org.opencontainers.image.version=${{ steps.ctx.outputs.tag }}
+            municipio-se.source-ref=${{ steps.ctx.outputs.tag }}
+            municipio-se.run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           build-args: |
-            "MUNICIPIO_DEPLOYMENT_REF=feat/municipio-clone"
+            "MUNICIPIO_DEPLOYMENT_REF=${{ steps.ctx.outputs.tag }}"
           secrets: |
             "acf_pro_key=${{ secrets.ACF_PRO_KEY }}"
-#          cache-from: type=gha
-#          cache-to: type=gha,mode=max
+          platforms: linux/amd64
 
       - name: Create release
         env:

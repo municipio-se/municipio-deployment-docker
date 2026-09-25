@@ -140,7 +140,7 @@ The source repository has no workflow of its own for this. Its webhook sends pul
 | `release-pr-stage` | `opened`, `synchronize`, `reopened`, or `edited` with a changed title | `version`, `head_sha`, `pr`, `delivery` |
 | `release-pr-merged` | `closed` with `merged: true` | `version`, `head_sha`, `merge_sha`, `pr`, `delivery` |
 
-`version` is the PR title (`X.Y.Z`, no `v`), `head_sha` is the PR's head commit, and `merge_sha` is the commit the merge created on `master`. Both workflows can also be run by hand from the Actions tab with the same values.
+`version` is the PR title (`X.Y.Z`, no `v`), `head_sha` is the PR's head commit, and `merge_sha` is the commit the merge created on `master`. Both workflows can also be run by hand from the Actions tab with the same values. Promote also takes a `dry_run` input when run by hand: it waits for and checks the rc, then reports which tags it would move, without pushing, tagging or releasing anything.
 
 Required secrets: `ACF_PRO_KEY`, and `SOURCE_REPO_TOKEN` (a token that can create tags in `municipio-se/municipio-deployment`, i.e. `contents: write`).
 

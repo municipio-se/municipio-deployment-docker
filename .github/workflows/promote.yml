@@ -22,11 +22,17 @@ on:
         description: 'Merge commit SHA on master to tag in municipio-deployment (empty skips the source tag)'
         required: false
         type: string
+      dry_run:
+        description: 'Only check and report what would be promoted; push, tag and release nothing'
+        required: false
+        type: boolean
+        default: false
 
 # Deliberately not the stage group: a queued promote there could replace the
 # pending rc build for the final head. Promote waits for that build instead.
+# A dry run gets its own group so it never holds up a real promotion.
 concurrency:
-  group: promote-${{ github.event.client_payload.version || inputs.version }}
+  group: promote-${{ github.event.client_payload.version || inputs.version }}${{ inputs.dry_run && '-dry-run' || '' }}
   cancel-in-progress: false
 
 permissions:
@@ -49,6 +55,7 @@ jobs:
           VERSION: ${{ github.event.client_payload.version || inputs.version }}
           HEAD_SHA: ${{ github.event.client_payload.head_sha || inputs.head_sha }}
           MERGE_SHA: ${{ github.event.client_payload.merge_sha || inputs.merge_sha }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
         run: |
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::refusing version: $VERSION"; exit 1; }
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::refusing head sha: $HEAD_SHA"; exit 1; }
@@ -57,7 +64,12 @@ jobs:
             echo "version=$VERSION"
             echo "head_sha=$HEAD_SHA"
             echo "merge_sha=$MERGE_SHA"
+            echo "dry_run=$DRY_RUN"
           } >> "$GITHUB_OUTPUT"
+          if [ "$DRY_RUN" = true ]; then
+            echo "::notice::Dry run — nothing will be pushed, tagged or released."
+            echo "**Dry run** — nothing below was pushed, tagged or released." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -103,6 +115,7 @@ jobs:
         env:
           VERSION: ${{ steps.ctx.outputs.version }}
           DIGEST: ${{ steps.rc.outputs.digest }}
+          DRY_RUN: ${{ steps.ctx.outputs.dry_run }}
         run: |
           # Re-running after a partial failure is fine; a different image is not.
           if existing="$(docker buildx imagetools inspect "$IMAGE:v$VERSION" --format '{{json .Manifest}}' 2>/dev/null)"; then
@@ -126,6 +139,14 @@ jobs:
             fi
           done
 
+          if [ "$DRY_RUN" = true ]; then
+            {
+              echo "Would promote \`${{ steps.rc.outputs.rc }}\` → ${tags[*]//-t /}"
+              echo
+              echo "Digest: \`$DIGEST\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           docker buildx imagetools create "${tags[@]}" "$IMAGE@$DIGEST"
           {
             echo "Promoted \`${{ steps.rc.outputs.rc }}\` → ${tags[*]//-t /}"
@@ -134,6 +155,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tag and release this repo
+        if: ${{ steps.ctx.outputs.dry_run != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.ctx.outputs.version }}
@@ -155,7 +177,7 @@ jobs:
       # the tag) upstream. A tag at the merge commit is fine; one elsewhere is
       # reported but does not undo the promotion.
       - name: Tag source repo
-        if: ${{ steps.ctx.outputs.merge_sha != '' }}
+        if: ${{ steps.ctx.outputs.merge_sha != '' && steps.ctx.outputs.dry_run != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
           VERSION: ${{ steps.ctx.outputs.version }}

@@ -1,0 +1,174 @@
+name: Promote
+
+# Promotes the release candidate built from a merged release PR's final head
+# to a full release. Nothing is rebuilt: the tested image is retagged.
+# The tag-relay dispatches `release-pr-merged` when a PR titled X.Y.Z is
+# merged in municipio-deployment. See README "Releases".
+
+on:
+  repository_dispatch:
+    types: [release-pr-merged]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (X.Y.Z)'
+        required: true
+        type: string
+      head_sha:
+        description: 'Final head SHA of the release PR (the one the rc was built from)'
+        required: true
+        type: string
+      merge_sha:
+        description: 'Merge commit SHA on master to tag in municipio-deployment (empty skips the source tag)'
+        required: false
+        type: string
+
+# Deliberately not the stage group: a queued promote there could replace the
+# pending rc build for the final head. Promote waits for that build instead.
+concurrency:
+  group: promote-${{ github.event.client_payload.version || inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  SOURCE_REPO: municipio-se/municipio-deployment
+
+jobs:
+  promote:
+    name: Promote release candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Resolve inputs
+        id: ctx
+        env:
+          VERSION: ${{ github.event.client_payload.version || inputs.version }}
+          HEAD_SHA: ${{ github.event.client_payload.head_sha || inputs.head_sha }}
+          MERGE_SHA: ${{ github.event.client_payload.merge_sha || inputs.merge_sha }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::refusing version: $VERSION"; exit 1; }
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::refusing head sha: $HEAD_SHA"; exit 1; }
+          [[ -z "$MERGE_SHA" || "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::refusing merge sha: $MERGE_SHA"; exit 1; }
+          {
+            echo "version=$VERSION"
+            echo "head_sha=$HEAD_SHA"
+            echo "merge_sha=$MERGE_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The rc for the final head may still be building when the PR is
+      # merged straight after a push, so wait for it rather than fail.
+      - name: Wait for the release candidate
+        id: rc
+        env:
+          VERSION: ${{ steps.ctx.outputs.version }}
+          SRC: ${{ env.IMAGE }}:src-${{ steps.ctx.outputs.head_sha }}
+        run: |
+          deadline=$((SECONDS + 45 * 60))
+          until docker buildx imagetools inspect "$SRC" >/dev/null 2>&1; do
+            if (( SECONDS >= deadline )); then
+              echo "::error::No image was built from ${SRC##*:src-} — run Stage for it, then re-run this workflow."
+              exit 1
+            fi
+            echo "waiting for $SRC ..."
+            sleep 30
+          done
+
+          labels="$(docker buildx imagetools inspect "$SRC" --format '{{json .Image.Config.Labels}}')"
+          built_for="$(jq -r '."org.opencontainers.image.version" // empty' <<<"$labels")"
+          if [ "$built_for" != "$VERSION" ]; then
+            echo "::error::$SRC was built as '$built_for', not $VERSION — run Stage for $VERSION first."
+            exit 1
+          fi
+          {
+            echo "digest=$(docker buildx imagetools inspect "$SRC" --format '{{json .Manifest}}' | jq -r .digest)"
+            echo "rc=$(jq -r '."municipio-se.rc" // empty' <<<"$labels")"
+            echo "revision=$(jq -r '."org.opencontainers.image.revision" // empty' <<<"$labels")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Retag as release
+        env:
+          VERSION: ${{ steps.ctx.outputs.version }}
+          DIGEST: ${{ steps.rc.outputs.digest }}
+        run: |
+          # Re-running after a partial failure is fine; a different image is not.
+          if existing="$(docker buildx imagetools inspect "$IMAGE:v$VERSION" --format '{{json .Manifest}}' 2>/dev/null)"; then
+            if [ "$(jq -r .digest <<<"$existing")" != "$DIGEST" ]; then
+              echo "::error::v$VERSION already exists as a different image — refusing to overwrite."
+              exit 1
+            fi
+          fi
+
+          # Floating tags only move forward, so a hotfix on an older line
+          # does not drag latest (or v6) backwards.
+          IFS=. read -r major minor _ <<<"$VERSION"
+          tags=(-t "$IMAGE:v$VERSION")
+          for floating in "v$major.$minor" "v$major" latest; do
+            current="$(docker buildx imagetools inspect "$IMAGE:$floating" --format '{{json .Image.Config.Labels}}' 2>/dev/null \
+              | jq -r '."org.opencontainers.image.version" // empty' || true)"
+            if [ -z "$current" ] || [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -1)" = "$VERSION" ]; then
+              tags+=(-t "$IMAGE:$floating")
+            else
+              echo "::notice::$floating stays on $current (newer than $VERSION)"
+            fi
+          done
+
+          docker buildx imagetools create "${tags[@]}" "$IMAGE@$DIGEST"
+          {
+            echo "Promoted \`${{ steps.rc.outputs.rc }}\` → ${tags[*]//-t /}"
+            echo
+            echo "Digest: \`$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Tag and release this repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ctx.outputs.version }}
+          REVISION: ${{ steps.rc.outputs.revision }}
+        run: |
+          existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" --jq .object.sha 2>/dev/null || true)"
+          if [ -z "$existing" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$VERSION" -f sha="$REVISION" >/dev/null
+          elif [ "$existing" != "$REVISION" ]; then
+            echo "::warning::Tag $VERSION here points at $existing, not the image's revision $REVISION — left as is."
+          fi
+          if ! gh release view "$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$VERSION" -R "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$VERSION" \
+              --notes "Image: \`$IMAGE:v$VERSION\` (promoted from \`${{ steps.rc.outputs.rc }}\`, municipio-deployment@\`${{ steps.ctx.outputs.head_sha }}\`)"
+          fi
+
+      # The maintainer may already have published the release (and with it
+      # the tag) upstream. A tag at the merge commit is fine; one elsewhere is
+      # reported but does not undo the promotion.
+      - name: Tag source repo
+        if: ${{ steps.ctx.outputs.merge_sha != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
+          VERSION: ${{ steps.ctx.outputs.version }}
+          MERGE_SHA: ${{ steps.ctx.outputs.merge_sha }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::SOURCE_REPO_TOKEN is not set — cannot tag $SOURCE_REPO."
+            exit 1
+          fi
+          existing="$(gh api "repos/$SOURCE_REPO/git/ref/tags/$VERSION" --jq .object.sha 2>/dev/null || true)"
+          if [ -z "$existing" ]; then
+            gh api "repos/$SOURCE_REPO/git/refs" -f ref="refs/tags/$VERSION" -f sha="$MERGE_SHA" >/dev/null
+            echo "Tagged $SOURCE_REPO@$MERGE_SHA as \`$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$existing" != "$MERGE_SHA" ]; then
+            echo "::warning::$SOURCE_REPO tag $VERSION already points at $existing, not merge commit $MERGE_SHA — left as is."
+          fi

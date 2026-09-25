@@ -25,9 +25,12 @@ WORKDIR /var/www/vhosts/localhost/html
 
 # Fetch the Municipio deployment repository. The ref may be a branch, a tag or
 # a full commit SHA (release PRs are built from their exact head commit).
+# The base image does not give WORKDIR to root, so git refuses to use a repo
+# initialised in place ("dubious ownership") unless it is marked safe.
 ARG MUNICIPIO_DEPLOYMENT_REPOSITORY=https://github.com/municipio-se/municipio-deployment.git
 ARG MUNICIPIO_DEPLOYMENT_REF=master
-RUN git init -q . && \
+RUN git config --global --add safe.directory "$PWD" && \
+    git init -q . && \
     git remote add origin "$MUNICIPIO_DEPLOYMENT_REPOSITORY" && \
     git fetch -q --depth 1 origin "${MUNICIPIO_DEPLOYMENT_REF:-HEAD}" && \
     git checkout -q FETCH_HEAD

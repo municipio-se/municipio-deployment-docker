@@ -10,7 +10,7 @@ You need:
 
 - Docker with Docker Compose
 - An ACF Pro license key used to download ACF Pro while building the image
-- A Municipio deployment repository and branch or tag (the defaults use the public Municipio deployment repository and its `main` branch)
+- A Municipio deployment repository and branch or tag (the defaults use the public Municipio deployment repository and its `master` branch)
 
 Set the ACF Pro key in your shell. Docker passes it to the build as a temporary BuildKit secret, so it does not need to be written into the Compose file or stored in the image:
 
@@ -25,7 +25,7 @@ You can also build the image without Compose:
 ```sh
 docker build \
   --secret id=acf_pro_key,env=ACF_PRO_KEY \
-  --build-arg MUNICIPIO_DEPLOYMENT_REF=main \
+  --build-arg MUNICIPIO_DEPLOYMENT_REF=master \
   -t municipio:local .
 ```
 
@@ -36,7 +36,7 @@ The available build arguments are:
 | Argument | Default | Purpose |
 | --- | --- | --- |
 | `MUNICIPIO_DEPLOYMENT_REPOSITORY` | Municipio's public deployment repository | Repository containing `composer.json` and `build.php`. |
-| `MUNICIPIO_DEPLOYMENT_REF` | `main` | Branch or tag to include in the image. |
+| `MUNICIPIO_DEPLOYMENT_REF` | `master` | Branch, tag or full commit SHA to include in the image. |
 
 The deployment source is copied into the image when it is built. Rebuild the image when you want to use a different version or include new source changes.
 
@@ -125,6 +125,24 @@ Remove the containers, database, and uploaded files, allowing a completely fresh
 ```sh
 docker compose down --volumes
 ```
+
+## Releases
+
+Published images are built from release pull requests in `municipio-se/municipio-deployment`. A pull request counts as a release PR when its title is a plain version such as `6.2.6`, it targets `master` and it comes from a branch in that repository (not a fork).
+
+1. **Stage.** Opening, pushing to, reopening or retitling a release PR builds the PR's head commit and pushes `ghcr.io/municipio-se/municipio-deployment-docker:v6.2.6-rc.N` (plus `src-<sha>`, used by promotion). Staging's Image Updater follows the newest rc.
+2. **Promote.** Merging the PR retags the rc built from the PR's final head commit as `v6.2.6`, and moves `v6.2`, `v6` and `latest` when this is the newest version on that line. Nothing is rebuilt, so production runs exactly the image that was tested in staging. Promotion then tags `6.2.6` and creates a GitHub release in this repository, and tags the merge commit as `6.2.6` in `municipio-deployment` if that tag does not already exist.
+
+The source repository has no workflow of its own for this. Its webhook sends pull request events to the `tag-relay` in the cluster (`helsingborg-stad/elx-k8s-apps`), which forwards them here as `repository_dispatch` events:
+
+| `event_type` | Sent when | `client_payload` |
+| --- | --- | --- |
+| `release-pr-stage` | `opened`, `synchronize`, `reopened`, or `edited` with a changed title | `version`, `head_sha`, `pr`, `delivery` |
+| `release-pr-merged` | `closed` with `merged: true` | `version`, `head_sha`, `merge_sha`, `pr`, `delivery` |
+
+`version` is the PR title (`X.Y.Z`, no `v`), `head_sha` is the PR's head commit, and `merge_sha` is the commit the merge created on `master`. Both workflows can also be run by hand from the Actions tab with the same values.
+
+Required secrets: `ACF_PRO_KEY`, and `SOURCE_REPO_TOKEN` (a token that can create tags in `municipio-se/municipio-deployment`, i.e. `contents: write`).
 
 ## Notes for deployed environments
 

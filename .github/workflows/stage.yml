@@ -1,0 +1,112 @@
+name: Stage
+
+# Builds a release candidate image for a release PR in municipio-deployment.
+# The tag-relay in the cluster dispatches `release-pr-stage` when a PR titled
+# X.Y.Z is opened, pushed to, reopened or retitled. See README "Releases".
+
+on:
+  repository_dispatch:
+    types: [release-pr-stage]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (X.Y.Z)'
+        required: true
+        type: string
+      head_sha:
+        description: 'Full commit SHA in municipio-deployment to build'
+        required: true
+        type: string
+
+# One build per version at a time. A newer pending push replaces an older
+# pending one, which is fine: only the newest head matters.
+concurrency:
+  group: stage-${{ github.event.client_payload.version || inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-rc:
+    name: Build release candidate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve inputs
+        id: ctx
+        env:
+          VERSION: ${{ github.event.client_payload.version || inputs.version }}
+          HEAD_SHA: ${{ github.event.client_payload.head_sha || inputs.head_sha }}
+          PR: ${{ github.event.client_payload.pr }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::refusing version: $VERSION"; exit 1; }
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::refusing sha: $HEAD_SHA"; exit 1; }
+          [[ -z "$PR" || "$PR" =~ ^[0-9]+$ ]] || { echo "::error::refusing pr: $PR"; exit 1; }
+          # run_number is monotonic per workflow, so rc numbers only ever grow.
+          # Gaps between them are harmless. A re-run keeps the run number, so
+          # it gets its own suffix (rc.57.2 > rc.57) instead of moving a tag.
+          rc="v$VERSION-rc.$GITHUB_RUN_NUMBER"
+          (( GITHUB_RUN_ATTEMPT > 1 )) && rc="$rc.$GITHUB_RUN_ATTEMPT"
+          {
+            echo "version=$VERSION"
+            echo "head_sha=$HEAD_SHA"
+            echo "pr=$PR"
+            echo "rc=$rc"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building \`$rc\` from municipio-deployment@\`$HEAD_SHA\`${PR:+ (PR #$PR)}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse released versions
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:v${{ steps.ctx.outputs.version }}" >/dev/null 2>&1; then
+            echo "::error::v${{ steps.ctx.outputs.version }} is already released — bump the PR title."
+            exit 1
+          fi
+
+      - name: Compute labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+
+      # Two tags: the rc that staging's Image Updater follows, and src-<sha>
+      # that promote uses to find the image built from the PR's final head.
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.ctx.outputs.rc }}
+            ${{ env.IMAGE }}:src-${{ steps.ctx.outputs.head_sha }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.source=https://github.com/municipio-se/municipio-deployment
+            org.opencontainers.image.version=${{ steps.ctx.outputs.version }}
+            municipio-se.source-ref=${{ steps.ctx.outputs.head_sha }}
+            municipio-se.source-sha=${{ steps.ctx.outputs.head_sha }}
+            municipio-se.rc=${{ steps.ctx.outputs.rc }}
+            municipio-se.pr=${{ steps.ctx.outputs.pr }}
+            municipio-se.run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          build-args: |
+            MUNICIPIO_DEPLOYMENT_REF=${{ steps.ctx.outputs.head_sha }}
+          secrets: |
+            "acf_pro_key=${{ secrets.ACF_PRO_KEY }}"
+          platforms: linux/amd64

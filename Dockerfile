@@ -23,14 +23,14 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
 # Set the working directory for the application to the location where the Municipio deployment will be cloned and served
 WORKDIR /var/www/vhosts/localhost/html
 
-# Clone the Municipio deployment repository
+# Fetch the Municipio deployment repository. The ref may be a branch, a tag or
+# a full commit SHA (release PRs are built from their exact head commit).
 ARG MUNICIPIO_DEPLOYMENT_REPOSITORY=https://github.com/municipio-se/municipio-deployment.git
 ARG MUNICIPIO_DEPLOYMENT_REF=master
-RUN if [ -n "$MUNICIPIO_DEPLOYMENT_REF" ]; then \
-    git clone --branch "$MUNICIPIO_DEPLOYMENT_REF" --single-branch "$MUNICIPIO_DEPLOYMENT_REPOSITORY" .; \
-    else \
-    git clone "$MUNICIPIO_DEPLOYMENT_REPOSITORY" .; \
-    fi
+RUN git init -q . && \
+    git remote add origin "$MUNICIPIO_DEPLOYMENT_REPOSITORY" && \
+    git fetch -q --depth 1 origin "${MUNICIPIO_DEPLOYMENT_REF:-HEAD}" && \
+    git checkout -q FETCH_HEAD
 
 # Build the project with Composer and the Municipio build script
 RUN --mount=type=secret,id=acf_pro_key,required=true \

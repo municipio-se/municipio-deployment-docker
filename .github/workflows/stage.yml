@@ -32,9 +32,14 @@ env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  build-rc:
-    name: Build release candidate
+  prepare:
+    name: Prepare release candidate
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ctx.outputs.version }}
+      head_sha: ${{ steps.ctx.outputs.head_sha }}
+      pr: ${{ steps.ctx.outputs.pr }}
+      rc: ${{ steps.ctx.outputs.rc }}
     steps:
       - name: Resolve inputs
         id: ctx
@@ -47,8 +52,10 @@ jobs:
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::refusing sha: $HEAD_SHA"; exit 1; }
           [[ -z "$PR" || "$PR" =~ ^[0-9]+$ ]] || { echo "::error::refusing pr: $PR"; exit 1; }
           # run_number is monotonic per workflow, so rc numbers only ever grow.
-          # Gaps between them are harmless. A re-run keeps the run number, so
-          # it gets its own suffix (rc.57.2 > rc.57) instead of moving a tag.
+          # Gaps between them are harmless. A full re-run keeps the run number,
+          # so it gets its own suffix (rc.57.2 > rc.57) instead of moving a tag.
+          # Re-running only failed jobs keeps the rc; it is only tagged once
+          # every platform has built.
           rc="v$VERSION-rc.$GITHUB_RUN_NUMBER"
           (( GITHUB_RUN_ATTEMPT > 1 )) && rc="$rc.$GITHUB_RUN_ATTEMPT"
           {
@@ -59,6 +66,39 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Building \`$rc\` from municipio-deployment@\`$HEAD_SHA\`${PR:+ (PR #$PR)}" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse released versions
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:v${{ steps.ctx.outputs.version }}" >/dev/null 2>&1; then
+            echo "::error::v${{ steps.ctx.outputs.version }} is already released — bump the PR title."
+            exit 1
+          fi
+
+  # Each platform builds natively (no QEMU) and is pushed by digest only; the
+  # merge job then tags the multi-platform index. linux/arm64 is what Docker
+  # on Apple Silicon Macs runs.
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -79,41 +119,86 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Refuse released versions
-        run: |
-          if docker buildx imagetools inspect "$IMAGE:v${{ steps.ctx.outputs.version }}" >/dev/null 2>&1; then
-            echo "::error::v${{ steps.ctx.outputs.version }} is already released — bump the PR title."
-            exit 1
-          fi
-
       - name: Compute labels
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
 
-      # Two tags: the rc that staging's Image Updater follows, and src-<sha>
-      # that promote uses to find the image built from the PR's final head.
       - name: Build and push image
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.ctx.outputs.rc }}
-            ${{ env.IMAGE }}:src-${{ steps.ctx.outputs.head_sha }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           labels: |
             ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.source=https://github.com/municipio-se/municipio-deployment
-            org.opencontainers.image.version=${{ steps.ctx.outputs.version }}
-            municipio-se.source-ref=${{ steps.ctx.outputs.head_sha }}
-            municipio-se.source-sha=${{ steps.ctx.outputs.head_sha }}
-            municipio-se.rc=${{ steps.ctx.outputs.rc }}
-            municipio-se.pr=${{ steps.ctx.outputs.pr }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            municipio-se.source-ref=${{ needs.prepare.outputs.head_sha }}
+            municipio-se.source-sha=${{ needs.prepare.outputs.head_sha }}
+            municipio-se.rc=${{ needs.prepare.outputs.rc }}
+            municipio-se.pr=${{ needs.prepare.outputs.pr }}
             municipio-se.run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           build-args: |
-            MUNICIPIO_DEPLOYMENT_REF=${{ steps.ctx.outputs.head_sha }}
+            MUNICIPIO_DEPLOYMENT_REF=${{ needs.prepare.outputs.head_sha }}
           secrets: |
             "acf_pro_key=${{ secrets.ACF_PRO_KEY }}"
-          platforms: linux/amd64
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+          echo "platform_slug=${PLATFORM//\//-}" >> "$GITHUB_ENV"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ env.platform_slug }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Two tags: the rc that staging's Image Updater follows, and src-<sha>
+  # that promote uses to find the image built from the PR's final head.
+  # Both are only created once every platform has built.
+  merge:
+    name: Tag release candidate
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-platform tags
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          RC: ${{ needs.prepare.outputs.rc }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+        run: |
+          sources=()
+          for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
+          docker buildx imagetools create \
+            -t "$IMAGE:$RC" \
+            -t "$IMAGE:src-$HEAD_SHA" \
+            "${sources[@]}"
+          docker buildx imagetools inspect "$IMAGE:$RC"

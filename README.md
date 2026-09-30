@@ -130,7 +130,7 @@ docker compose down --volumes
 
 Published images are built from release pull requests in `municipio-se/municipio-deployment`. A pull request counts as a release PR when its title is a plain version such as `6.2.6`, it targets `master` and it comes from a branch in that repository (not a fork).
 
-1. **Stage.** Opening, pushing to, reopening or retitling a release PR builds the PR's head commit and pushes `ghcr.io/municipio-se/municipio-deployment-docker:v6.2.6-rc.N` (plus `src-<sha>`, used by promotion). Staging's Image Updater follows the newest rc.
+1. **Stage.** Opening, pushing to, reopening or retitling a release PR builds the PR's head commit and pushes `ghcr.io/municipio-se/municipio-deployment-docker:v6.2.6-rc.N` (plus `src-<sha>`, used by promotion). The image is multi-platform: `linux/amd64` for the cluster and `linux/arm64` for Apple Silicon Macs, each built on a native runner. Staging's Image Updater follows the newest rc.
 2. **Promote.** Merging the PR retags the rc built from the PR's final head commit as `v6.2.6`, and moves `v6.2`, `v6` and `latest` when this is the newest version on that line. Nothing is rebuilt, so production runs exactly the image that was tested in staging. Promotion then tags `6.2.6` and creates a GitHub release in this repository, and tags the merge commit as `6.2.6` in `municipio-deployment` if that tag does not already exist.
 
 The source repository has no workflow of its own for this. Its webhook sends pull request events to the `tag-relay` in the cluster (`helsingborg-stad/elx-k8s-apps`), which forwards them here as `repository_dispatch` events:

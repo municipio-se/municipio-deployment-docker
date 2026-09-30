@@ -42,6 +42,14 @@ permissions:
 env:
   IMAGE: ghcr.io/${{ github.repository }}
   SOURCE_REPO: municipio-se/municipio-deployment
+  # Prints an image's labels as JSON. On a multi-platform index .Image is a
+  # map by platform (labels are the same on each); older single-platform
+  # images have a plain .Image, so fall back to that.
+  LABELS_OF: |
+    labels_of() {
+      docker buildx imagetools inspect "$1" --format '{{json (index .Image "linux/amd64").Config.Labels}}' 2>/dev/null \
+        || docker buildx imagetools inspect "$1" --format '{{json .Image.Config.Labels}}'
+    }
 
 jobs:
   promote:
@@ -99,7 +107,8 @@ jobs:
             sleep 30
           done
 
-          labels="$(docker buildx imagetools inspect "$SRC" --format '{{json .Image.Config.Labels}}')"
+          eval "$LABELS_OF"
+          labels="$(labels_of "$SRC")"
           built_for="$(jq -r '."org.opencontainers.image.version" // empty' <<<"$labels")"
           if [ "$built_for" != "$VERSION" ]; then
             echo "::error::$SRC was built as '$built_for', not $VERSION — run Stage for $VERSION first."
@@ -127,10 +136,11 @@ jobs:
 
           # Floating tags only move forward, so a hotfix on an older line
           # does not drag latest (or v6) backwards.
+          eval "$LABELS_OF"
           IFS=. read -r major minor _ <<<"$VERSION"
           tags=(-t "$IMAGE:v$VERSION")
           for floating in "v$major.$minor" "v$major" latest; do
-            current="$(docker buildx imagetools inspect "$IMAGE:$floating" --format '{{json .Image.Config.Labels}}' 2>/dev/null \
+            current="$(labels_of "$IMAGE:$floating" 2>/dev/null \
               | jq -r '."org.opencontainers.image.version" // empty' || true)"
             if [ -z "$current" ] || [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -1)" = "$VERSION" ]; then
               tags+=(-t "$IMAGE:$floating")

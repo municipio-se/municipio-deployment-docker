@@ -74,4 +74,4 @@ EXPOSE 80
 # Define a health check for the web server
 HEALTHCHECK CMD test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/)" = "200"
 
-ENTRYPOINT ["./setup/setup.sh"]
+ENTRYPOINT ["./setup/setup.py"]

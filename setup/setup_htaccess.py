@@ -79,7 +79,9 @@ def main() -> None:
     if enable_ls_cache == "true":
         content = LSCACHE_RULES.encode() + content
 
-    (ROOT_DIR / ".htaccess").write_bytes(content)
+    htaccess = ROOT_DIR / ".htaccess"
+    htaccess.write_bytes(content)
+    os.chown(htaccess, 1000, 1000)
 
 
 if __name__ == "__main__":

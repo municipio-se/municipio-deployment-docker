@@ -109,11 +109,13 @@ Follow startup logs:
 docker compose logs -f municipio
 ```
 
-Run WP-CLI:
+Run WP-CLI as the webroot owner, so files created by commands remain writable by OpenLiteSpeed:
 
 ```sh
-docker compose exec municipio wp option get siteurl --allow-root
+docker compose exec --user ubuntu municipio wp option get siteurl
 ```
+
+Use `docker compose exec --user ubuntu municipio <command>` for other commands that write to the webroot. The container starts as root to install optional packages and configure OpenLiteSpeed.
 
 Stop the containers while keeping the database and uploaded files:
 

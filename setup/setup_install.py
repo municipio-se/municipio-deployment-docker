@@ -23,7 +23,7 @@ def wp(*args: str, check: bool = True) -> int:
 
     With check, a failing command exits this script with the same code.
     """
-    code = subprocess.run(["wp", *args, "--allow-root"], cwd=ROOT_DIR).returncode
+    code = subprocess.run(["runuser", "-u", "ubuntu", "--", "wp", *args], cwd=ROOT_DIR).returncode
     if check and code != 0:
         sys.exit(code)
     return code

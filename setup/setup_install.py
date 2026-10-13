@@ -11,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from setup_htaccess import env
+from setup_htaccess import WEBROOT_OWNER, env
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
@@ -23,7 +23,7 @@ def wp(*args: str, check: bool = True) -> int:
 
     With check, a failing command exits this script with the same code.
     """
-    code = subprocess.run(["runuser", "-u", "ubuntu", "--", "wp", *args], cwd=ROOT_DIR).returncode
+    code = subprocess.run(["runuser", "-u", WEBROOT_OWNER, "--", "wp", *args], cwd=ROOT_DIR).returncode
     if check and code != 0:
         sys.exit(code)
     return code

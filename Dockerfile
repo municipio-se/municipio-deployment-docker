@@ -62,14 +62,14 @@ WORKDIR /var/www/vhosts/localhost/html
 # WP-CLI is needed by the startup scripts, but Composer, Node.js, npm, and Git
 # are build-only dependencies and stay in the builder stage.
 COPY --from=builder /usr/local/bin/wp /usr/local/bin/wp
-COPY --from=builder --chown=1000:1000 /var/www/vhosts/localhost/html/ ./
+COPY --from=builder --chown=ubuntu:ubuntu /var/www/vhosts/localhost/html/ ./
 
-COPY --chown=1000:1000 --chmod=755 htaccess ./htaccess
-COPY --chown=1000:1000 --chmod=755 config ./config
-COPY --chown=1000:1000 --chmod=755 setup ./setup
+COPY --chown=ubuntu:ubuntu --chmod=755 htaccess ./htaccess
+COPY --chown=ubuntu:ubuntu --chmod=755 config ./config
+COPY --chown=ubuntu:ubuntu --chmod=755 setup ./setup
 
 RUN mkdir -p wp-content/uploads/cache/blade-cache && \
-    chown 1000:1000 wp-content/uploads/cache/blade-cache
+    chown ubuntu:ubuntu wp-content/uploads/cache/blade-cache
 
 EXPOSE 80
 

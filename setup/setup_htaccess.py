@@ -16,9 +16,13 @@ Otherwise use .htaccess
 from __future__ import annotations
 
 import os
+import pwd
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+
+# The user that owns the webroot and runs WP-CLI.
+WEBROOT_OWNER = "ubuntu"
 
 LSCACHE_RULES = r"""# BEGIN LSCACHE
 ## LITESPEED WP CACHE PLUGIN - Do not edit the contents of this block! ##
@@ -81,7 +85,8 @@ def main() -> None:
 
     htaccess = ROOT_DIR / ".htaccess"
     htaccess.write_bytes(content)
-    os.chown(htaccess, 1000, 1000)
+    owner = pwd.getpwnam(WEBROOT_OWNER)
+    os.chown(htaccess, owner.pw_uid, owner.pw_gid)
 
 
 if __name__ == "__main__":

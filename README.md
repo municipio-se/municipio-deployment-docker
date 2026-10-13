@@ -58,6 +58,7 @@ Runtime settings use the `WP_CONF_` prefix. The most useful ones are:
 | `WP_CONF_WP_DEBUG` | Set to `true` to enable WordPress debugging. |
 | `WP_CONF_WP_REDIS_DISABLED` | Set to `true` when no Redis or Valkey service is used. |
 | `ENABLE_LS_CACHE` | Set to `true` to enable LiteSpeed Cache plugin and add LiteSpeed rewrite rules to `.htaccess` on startup. |
+| `ENABLE_PHP_TIDY` | Set to `true` to install the Tidy extension for the current LiteSpeed PHP version on startup (requires access to the package repository). |
 
 The database and admin values are only used to perform the initial installation. If a database volume already contains WordPress, changing the initial admin values will not update the existing account.
 

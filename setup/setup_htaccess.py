@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
-"""Select the .htaccess template matching the site type and copy it to the
-document root as ".htaccess", which is where OpenLiteSpeed's
-autoLoadHtaccess/RewriteFile config actually reads it from (not the
-"htaccess/" source folder itself).
+"""Create the document root .htaccess from the selected site template if missing.
 
-We have 3 htaccess files
-1. htaccess/.htaccess
-2. htaccess/.htaccess-multisite-subdomain
-3. htaccess/.htaccess-multisite-subfolder
-
-So if WP_ALLOW_MULTISITE is true and SUBDOMAIN_INSTALL is true use .htaccess-multisite-subdomain
-If WP_ALLOW_MULTISITE is true and SUBDOMAIN_INSTALL is false use .htaccess-multisite-subfolder
-Otherwise use .htaccess
+OpenLiteSpeed's autoLoadHtaccess/RewriteFile reads the document root file, not
+the templates in htaccess/. Existing rules and ownership are left untouched.
 """
 from __future__ import annotations
 
@@ -63,6 +54,10 @@ def env(name: str, default: str = "") -> str:
 
 
 def main() -> None:
+    htaccess = ROOT_DIR / ".htaccess"
+    if htaccess.exists() or htaccess.is_symlink():
+        return
+
     allow_multisite = env("WP_ALLOW_MULTISITE", "false")
     subdomain = env("SUBDOMAIN_INSTALL", "false")
     enable_ls_cache = env("ENABLE_LS_CACHE", "false")
@@ -79,8 +74,11 @@ def main() -> None:
     if enable_ls_cache == "true":
         content = LSCACHE_RULES.encode() + content
 
-    htaccess = ROOT_DIR / ".htaccess"
-    htaccess.write_bytes(content)
+    try:
+        with htaccess.open("xb") as file:
+            file.write(content)
+    except FileExistsError:
+        return
     os.chown(htaccess, 1000, 1000)
 
 

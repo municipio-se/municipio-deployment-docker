@@ -42,12 +42,6 @@ def main() -> None:
     subdomain = env("SUBDOMAIN_INSTALL", "false")
 
     if wp("core", "is-installed", check=False) == 0:
-        # .htaccess isn't persisted across container restarts/rebuilds, but the
-        # permalink structure and any rewrite rules plugins register (both stored
-        # in the database, which IS persisted via the db-data volume) are. Flush
-        # them back into .htaccess every time the container starts so rewrite
-        # rules generated at runtime survive a restart without needing a mount.
-        wp("rewrite", "flush", "--hard")
         return
 
     tries = 0

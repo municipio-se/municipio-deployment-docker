@@ -39,7 +39,7 @@ jobs:
       version: ${{ steps.ctx.outputs.version }}
       head_sha: ${{ steps.ctx.outputs.head_sha }}
       pr: ${{ steps.ctx.outputs.pr }}
-      rc: ${{ steps.ctx.outputs.rc }}
+      rc: ${{ steps.rc.outputs.rc }}
     steps:
       - name: Resolve inputs
         id: ctx
@@ -51,20 +51,11 @@ jobs:
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::refusing version: $VERSION"; exit 1; }
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::refusing sha: $HEAD_SHA"; exit 1; }
           [[ -z "$PR" || "$PR" =~ ^[0-9]+$ ]] || { echo "::error::refusing pr: $PR"; exit 1; }
-          # run_number is monotonic per workflow, so rc numbers only ever grow.
-          # Gaps between them are harmless. A full re-run keeps the run number,
-          # so it gets its own suffix (rc.57.2 > rc.57) instead of moving a tag.
-          # Re-running only failed jobs keeps the rc; it is only tagged once
-          # every platform has built.
-          rc="v$VERSION-rc.$GITHUB_RUN_NUMBER"
-          (( GITHUB_RUN_ATTEMPT > 1 )) && rc="$rc.$GITHUB_RUN_ATTEMPT"
           {
             echo "version=$VERSION"
             echo "head_sha=$HEAD_SHA"
             echo "pr=$PR"
-            echo "rc=$rc"
           } >> "$GITHUB_OUTPUT"
-          echo "Building \`$rc\` from municipio-deployment@\`$HEAD_SHA\`${PR:+ (PR #$PR)}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -82,6 +73,40 @@ jobs:
             echo "::error::v${{ steps.ctx.outputs.version }} is already released — bump the PR title."
             exit 1
           fi
+
+      # rc numbers count per version from 0: one more than the highest rc of
+      # this version in the registry. The concurrency group serialises runs of
+      # a version, and a failed run tags nothing, so its number is simply
+      # reused. Legacy re-run tags (rc.57.2) count by their first number. An
+      # empty listing means the listing broke, not that the repo is empty:
+      # guessing rc.0 there would sort below the existing rcs and staging
+      # would never pick it up.
+      - name: Number release candidate
+        id: rc
+        env:
+          VERSION: ${{ steps.ctx.outputs.version }}
+          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+          PR: ${{ steps.ctx.outputs.pr }}
+          REPO: ${{ github.repository }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          token="$(curl -fsSu "$GHCR_USER:$GHCR_TOKEN" "https://ghcr.io/token?scope=repository:$REPO:pull" | jq -er .token)"
+          tags="" url="/v2/$REPO/tags/list?n=1000" headers="$(mktemp)"
+          while [[ -n "$url" ]]; do
+            tags+="$(curl -fsS -D "$headers" -H "Authorization: Bearer $token" "https://ghcr.io$url" | jq -r '.tags // [] | .[]')"$'\n'
+            url="$(sed -nE 's/^link: *<([^>]+)>; *rel="next".*/\1/Ip' "$headers" | tr -d '\r')"
+          done
+          grep -q . <<<"$tags" || { echo "::error::no tags listed for $REPO"; exit 1; }
+          re="^v${VERSION//./\\.}-rc\\.([0-9]+)(\\.[0-9]+)?$"
+          n=0
+          while read -r t; do
+            if [[ "$t" =~ $re ]] && (( BASH_REMATCH[1] >= n )); then n=$(( BASH_REMATCH[1] + 1 )); fi
+          done <<<"$tags"
+          rc="v$VERSION-rc.$n"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "Building \`$rc\` from municipio-deployment@\`$HEAD_SHA\`${PR:+ (PR #$PR)}" >> "$GITHUB_STEP_SUMMARY"
 
   # Each platform builds natively (no QEMU) and is pushed by digest only; the
   # merge job then tags the multi-platform index. linux/arm64 is what Docker
@@ -195,6 +220,12 @@ jobs:
           RC: ${{ needs.prepare.outputs.rc }}
           HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
         run: |
+          # Re-running only failed jobs keeps this run's rc, which a newer run
+          # of the same version may have tagged in the meantime.
+          if docker buildx imagetools inspect "$IMAGE:$RC" >/dev/null 2>&1; then
+            echo "::error::$RC already exists — re-run the whole workflow to get a new rc."
+            exit 1
+          fi
           sources=()
           for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
           docker buildx imagetools create \

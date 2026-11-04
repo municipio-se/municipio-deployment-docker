@@ -17,18 +17,29 @@ OLS_CONF = Path("/usr/local/lsws/conf/httpd_config.conf")
 OLS_ENTRYPOINT = "/entrypoint.sh"
 
 WP_CONF_NAME = re.compile(r"WP_CONF_[A-Za-z0-9_]+")
+ENV_VAR_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 def inject_ols_env() -> None:
-    """Inject only WP_CONF_* environment variables into the OpenLiteSpeed
+    """Inject allowed environment variables into the OpenLiteSpeed
     lsphp extProcessor, as "env NAME=VALUE" lines right after its opening line."""
     if not OLS_CONF.is_file():
         return
+
+    explicit_names = set()
+    if configured_names := os.environ.get("OLS_PHP_ENV_VARS"):
+        for requested_name in configured_names.split(","):
+            name = requested_name.strip()
+            if not ENV_VAR_NAME.fullmatch(name):
+                raise ValueError(f"Invalid name in OLS_PHP_ENV_VARS: {name!r}")
+            if name not in os.environ:
+                raise ValueError(f"OLS_PHP_ENV_VARS references an unset variable: {name}")
+            explicit_names.add(name)
 
     env_lines = [
         # A config line can't span lines, so only the first line of a value is kept.
         f"    env {name}={value.splitlines()[0] if value else ''}\n"
         for name, value in os.environ.items()
-        if WP_CONF_NAME.fullmatch(name)
+        if WP_CONF_NAME.fullmatch(name) or name in explicit_names
     ]
     if not env_lines:
         return

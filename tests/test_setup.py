@@ -7,8 +7,76 @@ from unittest.mock import call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "setup"))
 
+import setup
 import setup_htaccess
 import setup_install
+
+
+class OpenLiteSpeedEnvironmentTests(unittest.TestCase):
+    def test_wordpress_settings_reach_lsphp_without_forwarding_other_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "httpd_config.conf"
+            config.write_text("extProcessor lsphp{\n    type lsapi\n}\n")
+            environment = {
+                "TIDEWAYS_APIKEY": "tideways-secret",
+                "TIDEWAYS_FUTURE_SETTING": "enabled",
+                "WP_CONF_EXTRA_TIDEWAYS_APIKEY": "wordpress-secret",
+                "WP_CONF_DB_NAME": "municipio",
+                "TIDEWAYS_OTHER-INVALID": "not-forwarded",
+                "UNRELATED_SECRET": "not-forwarded",
+            }
+            with patch.dict(os.environ, environment, clear=True), \
+                 patch.object(setup, "OLS_CONF", config):
+                setup.inject_ols_env()
+
+            self.assertEqual(config.read_text(), (
+                "extProcessor lsphp{\n"
+                "    env WP_CONF_EXTRA_TIDEWAYS_APIKEY=wordpress-secret\n"
+                "    env WP_CONF_DB_NAME=municipio\n"
+                "    type lsapi\n"
+                "}\n"
+            ))
+
+    def test_explicit_names_forward_other_environment_variables(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "httpd_config.conf"
+            config.write_text("extProcessor lsphp{\n    type lsapi\n}\n")
+            environment = {
+                "OLS_PHP_ENV_VARS": "TIDEWAYS_APIKEY, OTHER_API_KEY, CUSTOM_SETTING, OTHER_API_KEY",
+                "TIDEWAYS_APIKEY": "tideways-secret",
+                "TIDEWAYS_FUTURE_SETTING": "not-forwarded",
+                "OTHER_API_KEY": "secret",
+                "CUSTOM_SETTING": "enabled",
+                "UNRELATED_SECRET": "not-forwarded",
+            }
+            with patch.dict(os.environ, environment, clear=True), \
+                 patch.object(setup, "OLS_CONF", config):
+                setup.inject_ols_env()
+
+            self.assertEqual(config.read_text(), (
+                "extProcessor lsphp{\n"
+                "    env TIDEWAYS_APIKEY=tideways-secret\n"
+                "    env OTHER_API_KEY=secret\n"
+                "    env CUSTOM_SETTING=enabled\n"
+                "    type lsapi\n"
+                "}\n"
+            ))
+
+    def test_invalid_or_missing_explicit_names_fail_setup(self):
+        for names, environment in (
+            ("MISSING_KEY", {}),
+            ("INVALID-NAME", {"INVALID-NAME": "secret"}),
+            ("CUSTOM_SETTING,", {"CUSTOM_SETTING": "enabled"}),
+        ):
+            with self.subTest(names=names), tempfile.TemporaryDirectory() as directory:
+                config = Path(directory) / "httpd_config.conf"
+                original = "extProcessor lsphp{\n    type lsapi\n}\n"
+                config.write_text(original)
+                with patch.dict(os.environ, {"OLS_PHP_ENV_VARS": names, **environment}, clear=True), \
+                     patch.object(setup, "OLS_CONF", config):
+                    with self.assertRaises(ValueError):
+                        setup.inject_ols_env()
+                self.assertEqual(config.read_text(), original)
 
 
 class HtaccessSetupTests(unittest.TestCase):

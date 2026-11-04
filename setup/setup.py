@@ -15,7 +15,7 @@ import setup_install
 ROOT_DIR = Path(__file__).resolve().parent.parent
 OLS_CONF = Path("/usr/local/lsws/conf/httpd_config.conf")
 OLS_ENTRYPOINT = "/entrypoint.sh"
-PHP_INI_DIR = Path("/usr/local/lsws/conf/php-ini.d")
+LSWS_DIR = Path("/usr/local/lsws")
 PHP_INI_FILE = "zz-municipio-settings.ini"
 
 WP_CONF_NAME = re.compile(r"WP_CONF_[A-Za-z0-9_]+")
@@ -24,7 +24,7 @@ PHP_INI_DIRECTIVE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*\s*=.*")
 
 
 def configure_php_ini() -> None:
-    """Write optional PHP_INI_SETTINGS directives and expose them to PHP."""
+    """Write optional PHP_INI_SETTINGS directives to PHP's default scan directory."""
     settings = os.environ.get("PHP_INI_SETTINGS", "")
     directives = [line.strip() for line in settings.splitlines() if line.strip()]
     if not directives:
@@ -34,14 +34,15 @@ def configure_php_ini() -> None:
         if not PHP_INI_DIRECTIVE.fullmatch(directive):
             raise ValueError(f"Invalid PHP ini directive: {directive!r}")
 
-    PHP_INI_DIR.mkdir(parents=True, exist_ok=True)
-    (PHP_INI_DIR / PHP_INI_FILE).write_text("\n".join(directives) + "\n")
-
-    scan_dirs = os.environ.get("PHP_INI_SCAN_DIR", "").split(os.pathsep)
-    ini_dir = str(PHP_INI_DIR)
-    if ini_dir not in scan_dirs:
-        scan_dirs.append(ini_dir)
-    os.environ["PHP_INI_SCAN_DIR"] = os.pathsep.join(scan_dirs)
+    ini_dirs = [
+        path for path in LSWS_DIR.glob("lsphp*/etc/php/*/mods-available")
+        if path.is_dir()
+    ]
+    if len(ini_dirs) != 1:
+        raise RuntimeError(
+            f"Expected one LiteSpeed PHP ini directory under {LSWS_DIR}, found {len(ini_dirs)}"
+        )
+    (ini_dirs[0] / PHP_INI_FILE).write_text("\n".join(directives) + "\n")
 
 
 def inject_ols_env() -> None:
@@ -67,10 +68,6 @@ def inject_ols_env() -> None:
         for name, value in os.environ.items()
         if WP_CONF_NAME.fullmatch(name) or name in explicit_names
     ]
-    if os.environ.get("PHP_INI_SETTINGS", "").strip():
-        env_values = [(name, value) for name, value in env_values if name != "PHP_INI_SCAN_DIR"]
-        env_values.append(("PHP_INI_SCAN_DIR", os.environ["PHP_INI_SCAN_DIR"]))
-
     env_lines = [
         # A config line can't span lines, so only the first line of a value is kept.
         f"    env {name}={value.splitlines()[0] if value else ''}\n"

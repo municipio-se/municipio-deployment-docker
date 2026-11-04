@@ -86,7 +86,9 @@ environment:
     upload_max_filesize=64M
 ```
 
-The container writes these directives to an additional ini file and configures PHP to scan it after its existing ini directories. The setting is also available to PHP processes started during container setup. Invalid directive lines stop startup.
+The container discovers the LiteSpeed PHP version in the runtime image and writes these directives to an additional ini file in its default scanned directory, so they apply to both web requests and PHP processes started during container setup. If no single PHP ini directory can be found, or a directive line is invalid, startup stops with an error.
+
+In Kubernetes, an `envFrom.secretRef` Secret must have a key named `PHP_INI_SETTINGS` containing the newline-separated directives (for example, create it with `kubectl create secret generic php-ini --from-file=PHP_INI_SETTINGS=./settings.ini`). A Secret mounted as a file does not automatically become this environment variable. Restart the pod after changing the Secret; environment variables are not updated in running pods. Avoid overriding `PHP_INI_SCAN_DIR`, which can exclude the default scanned directory.
 
 ## Multisite
 

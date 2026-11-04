@@ -13,6 +13,11 @@ import setup_install
 
 
 class OpenLiteSpeedEnvironmentTests(unittest.TestCase):
+    def create_php_ini_dir(self, root, lsphp="lsphp83", version="8.3"):
+        ini_dir = root / lsphp / "etc" / "php" / version / "mods-available"
+        ini_dir.mkdir(parents=True)
+        return ini_dir
+
     def test_wordpress_settings_reach_lsphp_without_forwarding_other_secrets(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "httpd_config.conf"
@@ -62,61 +67,69 @@ class OpenLiteSpeedEnvironmentTests(unittest.TestCase):
                 "}\n"
             ))
 
-    def test_php_ini_settings_are_written_and_scan_path_is_forwarded(self):
+    def test_php_ini_settings_are_written_without_forwarding_multiline_values(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = root / "httpd_config.conf"
-            ini_dir = root / "php-ini.d"
+            ini_dir = self.create_php_ini_dir(root, "lsphp84", "8.4")
             config.write_text("extProcessor lsphp{\n    type lsapi\n}\n")
             environment = {
                 "PHP_INI_SETTINGS": "allow_url_include=0\nupload_max_filesize=64M",
-                "PHP_INI_SCAN_DIR": "/custom/php/conf.d",
             }
             with patch.dict(os.environ, environment, clear=True), \
                  patch.object(setup, "OLS_CONF", config), \
-                 patch.object(setup, "PHP_INI_DIR", ini_dir):
+                 patch.object(setup, "LSWS_DIR", root):
                 setup.inject_ols_env()
-
-                self.assertEqual(os.environ["PHP_INI_SCAN_DIR"],
-                                 f"/custom/php/conf.d:{ini_dir}")
+                self.assertNotIn("PHP_INI_SCAN_DIR", os.environ)
 
             self.assertEqual(
                 (ini_dir / setup.PHP_INI_FILE).read_text(),
                 "allow_url_include=0\nupload_max_filesize=64M\n",
             )
-            self.assertEqual(config.read_text(), (
-                "extProcessor lsphp{\n"
-                f"    env PHP_INI_SCAN_DIR=/custom/php/conf.d:{ini_dir}\n"
-                "    type lsapi\n"
-                "}\n"
-            ))
+            self.assertEqual(config.read_text(), "extProcessor lsphp{\n    type lsapi\n}\n")
 
-    def test_php_ini_settings_use_compiled_scan_directory_and_reject_invalid_lines(self):
+    def test_php_ini_settings_use_default_scan_directory_and_reject_invalid_lines(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = root / "httpd_config.conf"
-            ini_dir = root / "php-ini.d"
-            invalid_ini_dir = root / "invalid-php-ini.d"
+            ini_dir = self.create_php_ini_dir(root)
             original = "extProcessor lsphp{\n    type lsapi\n}\n"
             config.write_text(original)
 
             with patch.dict(os.environ, {"PHP_INI_SETTINGS": "allow_url_include=0"},
                             clear=True), \
                  patch.object(setup, "OLS_CONF", config), \
-                 patch.object(setup, "PHP_INI_DIR", ini_dir):
+                 patch.object(setup, "LSWS_DIR", root):
                 setup.inject_ols_env()
-                self.assertEqual(os.environ["PHP_INI_SCAN_DIR"], f":{ini_dir}")
+                self.assertNotIn("PHP_INI_SCAN_DIR", os.environ)
 
             config.write_text(original)
             with patch.dict(os.environ, {
                 "PHP_INI_SETTINGS": "allow_url_include=0\nunexpected config",
             }, clear=True), patch.object(setup, "OLS_CONF", config), \
-                 patch.object(setup, "PHP_INI_DIR", invalid_ini_dir):
+                 patch.object(setup, "LSWS_DIR", root):
                 with self.assertRaisesRegex(ValueError, "Invalid PHP ini directive"):
                     setup.inject_ols_env()
 
             self.assertEqual(config.read_text(), original)
-            self.assertFalse((invalid_ini_dir / setup.PHP_INI_FILE).exists())
+            self.assertEqual((ini_dir / setup.PHP_INI_FILE).read_text(),
+                             "allow_url_include=0\n")
+
+    def test_php_ini_settings_fail_when_scan_directory_is_missing_or_ambiguous(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.dict(os.environ, {"PHP_INI_SETTINGS": "memory_limit=128M"},
+                            clear=True), patch.object(setup, "LSWS_DIR", root):
+                with self.assertRaisesRegex(RuntimeError, "found 0"):
+                    setup.configure_php_ini()
+
+                first = self.create_php_ini_dir(root)
+                second = self.create_php_ini_dir(root, "lsphp84", "8.4")
+                with self.assertRaisesRegex(RuntimeError, "found 2"):
+                    setup.configure_php_ini()
+
+            self.assertFalse((first / setup.PHP_INI_FILE).exists())
+            self.assertFalse((second / setup.PHP_INI_FILE).exists())
 
     def test_invalid_or_missing_explicit_names_fail_setup(self):
         for names, environment in (

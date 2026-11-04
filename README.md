@@ -77,6 +77,17 @@ environment:
 
 For any additional setting needed by web PHP, add its name to the comma-separated `OLS_PHP_ENV_VARS` list and set its value separately in the container. `WP_CONF_*` variables continue to be forwarded automatically; all other variables, including `TIDEWAYS_*`, require explicit listing. Invalid or unset names in the list stop startup instead of silently omitting them. `WP_CONF_EXTRA_TIDEWAYS_APIKEY` instead defines a WordPress constant named `TIDEWAYS_APIKEY`; it does not set the environment variable used by the Tideways extension. Only list values PHP should be able to access; treat keys as secrets and avoid exposing `phpinfo()` publicly.
 
+To set PHP ini directives, use `PHP_INI_SETTINGS` with one `name=value` directive per line:
+
+```yaml
+environment:
+  PHP_INI_SETTINGS: |
+    allow_url_include=0
+    upload_max_filesize=64M
+```
+
+The container writes these directives to an additional ini file and configures PHP to scan it after its existing ini directories. The setting is also available to PHP processes started during container setup. Invalid directive lines stop startup.
+
 ## Multisite
 
 Multisite is optional. Add these settings to the `municipio` service to enable a subdomain network:

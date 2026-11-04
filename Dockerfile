@@ -53,7 +53,7 @@ RUN --mount=type=secret,id=acf_pro_key,required=true \
 # manager caches do not become part of the deployed image.
 FROM ghcr.io/helsingborg-stad/ols-docker-hbg:0.1.2-php8.3 AS runtime
 
-ENV PHP_EXTENSIONS=tidy,excimer
+ENV PHP_EXTENSIONS=tidy,tideways
 
 USER root
 

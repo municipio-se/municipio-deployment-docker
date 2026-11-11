@@ -1,6 +1,8 @@
-# Municipio Docker image
+# Municipio Docker image (legacy)
 
-This repository builds a ready-to-run [Municipio](https://github.com/municipio-se/municipio-deployment) WordPress image. The image contains OpenLiteSpeed, PHP, WordPress, WP-CLI, and a selected Municipio deployment. Composer, Node.js, npm, and Git are used only while building the image and are not included in the runtime image.
+> **Deprecated:** Container image development and publishing are moving to the modular Docker directory in [municipio-se/municipio-deployment](https://github.com/municipio-se/municipio-deployment). The directory's exact location is pending the cutover. Use that repository for new development and releases. This repository's Dockerfile, runtime setup, examples, and tests are retained for historical reference; its publishing workflows have been removed.
+
+The historical image contains OpenLiteSpeed, PHP, WordPress, WP-CLI, and a selected Municipio deployment. Composer, Node.js, npm, and Git are used only while building the image and are not included in the runtime image. The instructions below describe the legacy implementation, not the new image's build or runtime interface.
 
 On its first start, the container connects to the database, installs WordPress, and activates ACF Pro automatically. Later starts reuse the existing database and ensure that ACF Pro remains active.
 
@@ -157,21 +159,9 @@ docker compose down --volumes
 
 ## Releases
 
-Published images are built from release pull requests in `municipio-se/municipio-deployment`. A pull request counts as a release PR when its title is a plain version such as `6.2.6`, it targets `master` and it comes from a branch in that repository (not a fork).
+The new release flow in [municipio-se/municipio-deployment](https://github.com/municipio-se/municipio-deployment) builds release candidates from semver-titled pull requests and builds and publishes final images directly from semver tag pushes. Final images are rebuilt from the tag, not promoted from a legacy release candidate.
 
-1. **Stage.** Opening, pushing to, reopening or retitling a release PR builds the PR's head commit and pushes `ghcr.io/municipio-se/municipio-deployment-docker:v6.2.6-rc.N` (plus `src-<sha>`, used by promotion). N counts per version: the first build of `6.2.6` is `rc.0`, and each later one is one higher than the highest existing `6.2.6` rc. The image is multi-platform: `linux/amd64` for the cluster and `linux/arm64` for Apple Silicon Macs, each built on a native runner. Staging's Image Updater follows the newest rc.
-2. **Promote.** Merging the PR retags the rc built from the PR's final head commit as `v6.2.6`, and moves `v6.2`, `v6` and `latest` when this is the newest version on that line. Nothing is rebuilt, so production runs exactly the image that was tested in staging. Promotion then tags `6.2.6` and creates a GitHub release in this repository, and tags the merge commit as `6.2.6` in `municipio-deployment` if that tag does not already exist.
-
-The source repository has no workflow of its own for this. Its webhook sends pull request events to the `tag-relay` in the cluster (`helsingborg-stad/elx-k8s-apps`), which forwards them here as `repository_dispatch` events:
-
-| `event_type` | Sent when | `client_payload` |
-| --- | --- | --- |
-| `release-pr-stage` | `opened`, `synchronize`, `reopened`, or `edited` with a changed title | `version`, `head_sha`, `pr`, `delivery` |
-| `release-pr-merged` | `closed` with `merged: true` | `version`, `head_sha`, `merge_sha`, `pr`, `delivery` |
-
-`version` is the PR title (`X.Y.Z`, no `v`), `head_sha` is the PR's head commit, and `merge_sha` is the commit the merge created on `master`. Both workflows can also be run by hand from the Actions tab with the same values. Promote also takes a `dry_run` input when run by hand: it waits for and checks the rc, then reports which tags it would move, without pushing, tagging or releasing anything.
-
-Required secrets: `ACF_PRO_KEY`, and `SOURCE_REPO_TOKEN` (a token that can create tags in `municipio-se/municipio-deployment`, i.e. `contents: write`).
+The default image name is `ghcr.io/<owner>/<repo-name>`: the source repository uses `ghcr.io/municipio-se/municipio-deployment`, while forks use their own owner and repository name. This replaces the legacy `ghcr.io/municipio-se/municipio-deployment-docker` publishing path. Consult the deployment repository for its Docker directory and current release instructions once the cutover is available.
 
 ## Notes for deployed environments
 
